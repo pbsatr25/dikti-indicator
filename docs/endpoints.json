@@ -1,0 +1,728 @@
+{
+  "info": {
+    "name": "Dikti Indicator API",
+    "description": "API Documentation for Dikti Indicator Application\n\nAuth mechanism: Credentials login returns user object directly (no JWT token).\nFrontend stores user in localStorage as 'iku-user-session'.\nFor API requests that require auth (e.g., /api/chat), include header: x-user-email\n\nNote: x-user-email is validated against the database (appUser table, isActive check).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "userEmail",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/login",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Autentikasi user dengan email dan password.\n\nResponse: user object (not token)\nFrontend stores this in localStorage: 'iku-user-session'\n\nNote: No JWT token returned. User object contains: id, name, email, isActive, createdAt, updatedAt"
+          },
+          "response": [
+            {
+              "name": "Login Berhasil",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"user\": {\n    \"id\": \"usr_001\",\n    \"name\": \"John Doe\",\n    \"email\": \"user@example.com\",\n    \"isActive\": true,\n    \"createdAt\": \"2026-01-01T00:00:00.000Z\",\n    \"updatedAt\": \"2026-01-01T00:00:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Email dan password wajib diisi.\"\n}"
+            },
+            {
+              "name": "Unauthorized - Wrong Credentials",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Email atau sandi institusi salah.\"\n}"
+            },
+            {
+              "name": "Akun Dinonaktifkan",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Akun Anda telah dinonaktifkan. Silakan hubungi admin.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal memverifikasi login user dari database.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\",\n  \"confirmPassword\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/register",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "auth", "register"]
+            },
+            "description": "Pendaftaran user baru. Password minimal 6 karakter."
+          },
+          "response": [
+            {
+              "name": "Register Berhasil",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Semua kolom pendaftaran wajib diisi.\"\n}"
+            },
+            {
+              "name": "Email Sudah Terdaftar",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"Email institusi ini sudah terdaftar.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal menyimpan pendaftaran user ke database.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Google OAuth Start",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/google/start",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "auth", "google", "start"]
+            },
+            "description": "Redirect user ke Google OAuth login.\nThis is a GET request that returns 302 redirect to Google."
+          },
+          "response": [
+            {
+              "name": "Redirect ke Google",
+              "status": "Found",
+              "code": 302,
+              "body": "",
+              "header": [
+                {
+                  "key": "Location",
+                  "value": "https://accounts.google.com/o/oauth2/v2/auth..."
+                }
+              ]
+            },
+            {
+              "name": "Client ID Not Configured",
+              "status": "Bad Request",
+              "code": 400,
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "Google OAuth Callback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/google/callback?code=AUTH_CODE&state=STATE",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "auth", "google", "callback"],
+              "query": [
+                {
+                  "key": "code",
+                  "value": "AUTH_CODE"
+                },
+                {
+                  "key": "state",
+                  "value": "STATE"
+                }
+              ]
+            },
+            "description": "Google OAuth callback handler.\nServer exchanges code for token, gets user info, creates/updates user, and sets cookie 'iku_oauth_session'.\nThen redirects to /login?google_auth=success\n\nFrontend (login page) reads cookie 'iku_oauth_session' and stores it in localStorage as 'iku-user-session'."
+          },
+          "response": [
+            {
+              "name": "Redirect ke Login",
+              "status": "Found",
+              "code": 302,
+              "body": "",
+              "header": [
+                {
+                  "key": "Location",
+                  "value": "/login?google_auth=success"
+                }
+              ]
+            },
+            {
+              "name": "OAuth Error",
+              "status": "Found",
+              "code": 302,
+              "body": "",
+              "header": [
+                {
+                  "key": "Location",
+                  "value": "/login?google_auth=error&error=..."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/password/forgot",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "auth", "password", "forgot"]
+            },
+            "description": "Request password reset.\nReturns a reset token (only in development via 'debugResetToken' field).\nToken is valid for 30 minutes.\n\nNote: Token is NOT returned in production for security reasons."
+          },
+          "response": [
+            {
+              "name": "Request Berhasil",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true,\n  \"message\": \"Jika email terdaftar, instruksi reset password sudah dikirim.\",\n  \"debugResetToken\": \"abc123xyz...\"\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Email institusi wajib diisi.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal memproses permintaan reset password.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"reset-token-here\",\n  \"password\": \"newpassword123\",\n  \"confirmPassword\": \"newpassword123\"\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/password/reset",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "auth", "password", "reset"]
+            },
+            "description": "Reset password dengan token dari email.\nPassword minimal 6 karakter."
+          },
+          "response": [
+            {
+              "name": "Reset Berhasil",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Token, password, dan konfirmasi wajib diisi.\"\n}"
+            },
+            {
+              "name": "Token Invalid/Expired",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Token reset tidak valid atau sudah kedaluwarsa.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal mereset password.\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "item": [
+        {
+          "name": "Update Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"isActive\": true\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/users/status",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "users", "status"]
+            },
+            "description": "Update status aktif user (admin only).\nDefaults to true if isActive is not explicitly set to false."
+          },
+          "response": [
+            {
+              "name": "Status Berhasil Diupdate",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true,\n  \"email\": \"user@example.com\",\n  \"isActive\": true\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Email wajib diisi.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal memperbarui status aktif user.\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Sources",
+      "item": [
+        {
+          "name": "Get All Connections",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/sources?userEmail=user@example.com",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "sources"],
+              "query": [
+                {
+                  "key": "userEmail",
+                  "value": "user@example.com",
+                  "description": "User email to filter connections"
+                }
+              ]
+            },
+            "description": "Ambil semua koneksi data source user.\n\nNote: No authentication required. Caller must provide userEmail."
+          },
+          "response": [
+            {
+              "name": "List Connections Berhasil",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"connections\": [\n    {\n      \"id\": \"src_001\",\n      \"type\": \"sheet\",\n      \"name\": \"Data Mahasiswa\",\n      \"url\": \"https://docs.google.com/spreadsheets/d/xxx\",\n      \"files\": [\n        {\n          \"id\": \"file_001\",\n          \"name\": \"Sheet1\",\n          \"url\": \"https://docs.google.com/spreadsheets/d/xxx/edit#gid=0\"\n        }\n      ]\n    }\n  ]\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"userEmail wajib diisi.\"\n}"
+            },
+            {
+              "name": "Akun Dinonaktifkan",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Akun Anda telah dinonaktifkan. Silakan hubungi admin.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal memuat source connections.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Upsert Connections",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userEmail\": \"user@example.com\",\n  \"connections\": [\n    {\n      \"id\": \"src_001\",\n      \"type\": \"sheet\",\n      \"name\": \"Data Mahasiswa\",\n      \"url\": \"https://docs.google.com/spreadsheets/d/xxx\",\n      \"files\": [\n        {\n          \"id\": \"file_001\",\n          \"name\": \"Sheet1\",\n          \"url\": \"https://docs.google.com/spreadsheets/d/xxx/edit#gid=0\"\n        }\n      ]\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/sources",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "sources"]
+            },
+            "description": "Simpan/update koneksi data source user.\n\nNote: No authentication required. Caller must provide userEmail.\nExisting connections not in the list will be deleted."
+          },
+          "response": [
+            {
+              "name": "Connections Berhasil Disimpan",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"userEmail wajib diisi.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal menyimpan source connections.\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Dashboard Connections",
+      "item": [
+        {
+          "name": "Get All Connections",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/dashboard-connections?userEmail=user@example.com&dashboardTab=iku-overview",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "dashboard-connections"],
+              "query": [
+                {
+                  "key": "userEmail",
+                  "value": "user@example.com",
+                  "description": "User email (required)"
+                },
+                {
+                  "key": "dashboardTab",
+                  "value": "iku-overview",
+                  "description": "Optional: specific dashboard tab name"
+                }
+              ]
+            },
+            "description": "Ambil koneksi dashboard tab user.\n\nOptional: Add dashboardTab to get single connection.\n\nNote: No authentication required. Caller must provide userEmail."
+          },
+          "response": [
+            {
+              "name": "List Connections Berhasil",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"connections\": [\n    {\n      \"id\": \"conn_001\",\n      \"userEmail\": \"user@example.com\",\n      \"dashboardTab\": \"iku-overview\",\n      \"sourceId\": \"src_001\",\n      \"sourceLabel\": \"Data Mahasiswa\",\n      \"createdAt\": \"2026-01-01T00:00:00.000Z\",\n      \"updatedAt\": \"2026-01-01T00:00:00.000Z\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"userEmail wajib diisi.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal memuat koneksi dashboard.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Upsert Connection",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userEmail\": \"user@example.com\",\n  \"dashboardTab\": \"iku-overview\",\n  \"sourceId\": \"src_001\",\n  \"sourceLabel\": \"Data Mahasiswa\"\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/dashboard-connections",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "dashboard-connections"]
+            },
+            "description": "Simpan/update koneksi dashboard tab.\n\nAll fields are required."
+          },
+          "response": [
+            {
+              "name": "Connection Berhasil Disimpan",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true,\n  \"connection\": {\n    \"id\": \"conn_001\",\n    \"userEmail\": \"user@example.com\",\n    \"dashboardTab\": \"iku-overview\",\n    \"sourceId\": \"src_001\",\n    \"sourceLabel\": \"Data Mahasiswa\",\n    \"createdAt\": \"2026-01-01T00:00:00.000Z\",\n    \"updatedAt\": \"2026-01-01T00:00:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Data koneksi dashboard tidak lengkap.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal menyimpan koneksi dashboard.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Connection",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/dashboard-connections?userEmail=user@example.com&dashboardTab=iku-overview",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "dashboard-connections"],
+              "query": [
+                {
+                  "key": "userEmail",
+                  "value": "user@example.com",
+                  "description": "User email (required)"
+                },
+                {
+                  "key": "dashboardTab",
+                  "value": "iku-overview",
+                  "description": "Dashboard tab name to delete (required)"
+                }
+              ]
+            },
+            "description": "Hapus koneksi dashboard tab.\nBoth userEmail and dashboardTab are required."
+          },
+          "response": [
+            {
+              "name": "Connection Berhasil Dihapus",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"userEmail dan dashboardTab wajib diisi.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal mencabut koneksi dashboard.\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "IKU Targets",
+      "item": [
+        {
+          "name": "Get Targets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/iku-targets?userEmail=user@example.com",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "iku-targets"],
+              "query": [
+                {
+                  "key": "userEmail",
+                  "value": "user@example.com",
+                  "description": "User email to filter targets"
+                }
+              ]
+            },
+            "description": "Ambil target IKU user.\n\nNote: No authentication required. Caller must provide userEmail."
+          },
+          "response": [
+            {
+              "name": "List Targets Berhasil",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"targets\": {\n    \"IKU 1\": 100,\n    \"IKU 2\": 200,\n    \"IKU 3\": 150\n  }\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"userEmail wajib diisi.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal memuat target IKU dari database.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Upsert Targets",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userEmail\": \"user@example.com\",\n  \"targets\": {\n    \"IKU 1\": 100,\n    \"IKU 2\": 200,\n    \"IKU 3\": 150\n  }\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/iku-targets",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "iku-targets"]
+            },
+            "description": "Simpan/update target IKU user.\n\nNote: No authentication required. Caller must provide userEmail."
+          },
+          "response": [
+            {
+              "name": "Targets Berhasil Disimpan",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true\n}"
+            },
+            {
+              "name": "Validasi Gagal",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Data tidak lengkap atau tidak valid.\"\n}"
+            },
+            {
+              "name": "Server Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal menyimpan target IKU ke database.\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Chat",
+      "item": [
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-user-email",
+                "value": "{{userEmail}}",
+                "description": "Email user yang sudah login. Divalidasi terhadap database (appUser, isActive check)."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Apa definisi IKU 3?\",\n  \"scope\": {\n    \"kind\": \"iku\",\n    \"ikuCode\": \"IKU 003\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/chat",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "chat"]
+            },
+            "description": "Kirim pesan ke chatbot berbasis RAG (FastAPI).\n\nAuth: Header 'x-user-email' wajib diisi dengan email user yang sudah login.\nEmail divalidasi ke database — user harus ada dan isActive = true.\n\nAlur:\n1. Next.js validasi auth via DB\n2. Next.js kirim pertanyaan ke FastAPI RAG service (POST /v1/answer)\n3. Jika RAG minta data spreadsheet (action.type = 'fetch_data'), Next.js ambil data dari spreadsheet tool\n4. Next.js kirim ulang ke RAG dengan data spreadsheet untuk jawaban final\n\nScope (opsional):\n- kind: 'iku' untuk pertanyaan spesifik satu IKU, 'overview' untuk ringkasan semua IKU\n- ikuCode: kode IKU spesifik (misal: 'IKU 003')\n\nEnvironment variables yang dibutuhkan:\n- RAG_SERVICE_URL: URL base FastAPI RAG service\n- RAG_SERVICE_TOKEN: Token autentikasi internal ke RAG service"
+          },
+          "response": [
+            {
+              "name": "Chat Berhasil (RAG Response)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"answer\": \"IKU 3 adalah Indikator Kinerja Utama tentang...\",\n  \"citations\": [\n    {\n      \"id\": \"BUKU_0053\",\n      \"documentTitle\": \"Buku IKU Diktisaintek Berdampak\",\n      \"documentVersion\": \"V1\",\n      \"section\": \"IKU 3 · Formula\",\n      \"page\": 53,\n      \"ikuCode\": \"IKU 003\",\n      \"snippet\": \"Capaian IKU 3 dihitung berdasarkan...\"\n    }\n  ],\n  \"grounded\": true,\n  \"outOfScope\": null,\n  \"action\": null\n}"
+            },
+            {
+              "name": "Unauthorized - Missing or Invalid Email",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized.\"\n}"
+            },
+            {
+              "name": "Akun Dinonaktifkan",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Akun Anda telah dinonaktifkan. Silakan hubungi admin.\"\n}"
+            },
+            {
+              "name": "Validasi Gagal - Pesan Kosong",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"message wajib diisi.\"\n}"
+            },
+            {
+              "name": "Server Error (misal: RAG service down)",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"error\": \"Gagal memproses chat.\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

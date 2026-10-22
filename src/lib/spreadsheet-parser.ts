@@ -45,13 +45,65 @@ export async function parseSpreadsheetFile(file: File): Promise<ParsedSpreadshee
   return parseSpreadsheetBuffer(buffer);
 }
 
+/**
+ * Fetch dengan retry untuk menangani DNS failure intermittent (EAI_AGAIN)
+ * yang terjadi saat Google Sheets redirect ke subdomain dinamis
+ * (doc-XX-c4-sheets.googleusercontent.com).
+ */
+async function fetchWithRetry(
+  url: string,
+  maxAttempts = 3,
+  baseDelayMs = 500
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(url, { redirect: "follow" });
+      return response;
+    } catch (err) {
+      lastError = err;
+      // Hanya retry untuk error jaringan/DNS, bukan error lain
+      const isNetworkError =
+        err instanceof Error &&
+        err.cause instanceof Error &&
+        ["EAI_AGAIN", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND"].includes(
+          (err.cause as NodeJS.ErrnoException).code ?? ""
+        );
+      if (!isNetworkError || attempt === maxAttempts) break;
+      // Exponential backoff: 500ms, 1000ms
+      await new Promise((r) => setTimeout(r, baseDelayMs * attempt));
+    }
+  }
+  throw lastError;
+}
+
 export async function parseSpreadsheetUrl(url: string): Promise<ParsedSpreadsheet> {
   const trimmed = url.trim();
 
   const finalUrl = toGoogleSheetExportUrl(trimmed);
-  const response = await fetch(finalUrl);
+  let response: Response;
+  try {
+    response = await fetchWithRetry(finalUrl);
+  } catch (err) {
+    const cause = err instanceof Error ? (err.cause as NodeJS.ErrnoException | undefined) : undefined;
+    const code = cause?.code;
+    if (code === "EAI_AGAIN" || code === "ENOTFOUND") {
+      throw new Error(
+        "Tidak dapat menjangkau Google Sheets. Periksa koneksi internet server."
+      );
+    }
+    throw err;
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(
+      "Akses ditolak. Pastikan spreadsheet dibagikan sebagai 'Anyone with the link can view'."
+    );
+  }
   if (!response.ok) {
-    throw new Error("Gagal mengambil data dari URL spreadsheet");
+    throw new Error(
+      `Gagal mengambil data dari URL spreadsheet (HTTP ${response.status}).`
+    );
   }
 
   const buffer = await response.arrayBuffer();
@@ -65,9 +117,14 @@ export async function fetchSpreadsheetSheets(url: string): Promise<string[]> {
   const sheetId = match[1];
   const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
 
-  const response = await fetch(exportUrl);
+  const response = await fetchWithRetry(exportUrl);
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(
+      "Akses ditolak. Pastikan spreadsheet dibagikan sebagai 'Anyone with the link can view'."
+    );
+  }
   if (!response.ok) {
-    throw new Error("Gagal mengambil data dari URL spreadsheet");
+    throw new Error(`Gagal mengambil data dari URL spreadsheet (HTTP ${response.status}).`);
   }
 
   const buffer = await response.arrayBuffer();

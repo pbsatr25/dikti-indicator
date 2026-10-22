@@ -43,8 +43,8 @@ export async function createCredentialsUser(input: {
         provider: "credentials"
       }
     });
-  } catch (error: any) {
-    if (error?.code === "P2002") {
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error && error.code === "P2002") {
       throw new Error("EMAIL_EXISTS");
     }
     throw error;
