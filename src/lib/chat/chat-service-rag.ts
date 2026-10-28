@@ -34,15 +34,13 @@ export async function handleChatMessage(
     };
   }
 
-  console.log("[CHAT-DEBUG] 1. Incoming message:", trimmedMessage, "| Scope:", JSON.stringify(scope));
-
   // 1. RAG retrieval (selalu dilakukan untuk get intent + chunks)
   const ragClient = getRagClient();
   const ragResponse = await ragClient.answer(trimmedMessage, scope);
 
   // 2. Check RAG response: butuh data spreadsheet?
   const needsData = ragResponse.action?.type === "fetch_data";
-  console.log("[CHAT-DEBUG] 2. FastAPI Call 1 response:", JSON.stringify(ragResponse));
+  console.log("[CHAT] Call 1 selesai. action.type:", ragResponse.action?.type ?? "none", "| citations:", ragResponse.citations.length);
 
   if (needsData) {
     // 3. Butuh data spreadsheet
@@ -64,7 +62,6 @@ export async function handleChatMessage(
       : "IKU 001";
 
     // Deteksi tahun dari pertanyaan user (misal 2024, 2025, 2026).
-    
     const yearMatch = trimmedMessage.match(/\b(202\d)\b/);
     const requestedYear = yearMatch ? yearMatch[1] : null;
 
@@ -78,44 +75,49 @@ export async function handleChatMessage(
       column: null,
     };
 
-    console.log("[CHAT-DEBUG] 3. Executing spreadsheet tool with request:", JSON.stringify(spreadsheetRequest));
+    console.log("[CHAT] Menjalankan tool spreadsheet. indicator:", spreadsheetRequest.indicator, "| year:", spreadsheetRequest.year ?? "semua");
 
     try {
       const toolResult = await executeTool(user, spreadsheetRequest, clientData);
-      console.log("[CHAT-DEBUG] 4. Tool Result status:", toolResult.status, "| message:", toolResult.message || "OK");
+      // Type narrowing sebelum akses .message agar patuh pada TypeScript strict mode
+      console.log("[CHAT] Tool Result status:", toolResult.status, "| message:", toolResult.status === "ok" ? "OK" : toolResult.message);
 
       if (toolResult.status === "ok") {
         // Format data untuk LLM-friendly
         const dataContext = formatToolResultForLLM(toolResult);
-        console.log("[CHAT-DEBUG] 5. Formatted dataContext length:", dataContext.length);
-        console.log("[CHAT-DEBUG] 5b. Formatted dataContext preview:\n", dataContext.slice(0, 500));
+        // Log hanya metadata (panjang & jumlah baris), bukan isi data mentah
+        console.log("[CHAT] dataContext siap. panjang:", dataContext.length, "karakter | matchedRows:", toolResult.matchedRows);
 
         // Kirim ulang ke RAG dengan question + spreadsheet_context
-
         try {
           // Pastikan scope juga membawa indicator yang benar ke Call 2
           const updatedScope = { ...scope, ikuCode: indicator };
-          console.log("[CHAT-DEBUG] 6. Calling FastAPI Call 2 (answerWithSpreadsheet) with scope:", JSON.stringify(updatedScope));
+          console.log("[CHAT] Memanggil Call 2 (answerWithSpreadsheet). ikuCode:", updatedScope.ikuCode);
 
           const secondResponse = await ragClient.answerWithSpreadsheet(
             trimmedMessage,
             dataContext,
             updatedScope
           );
-          console.log("[CHAT-DEBUG] 7. FastAPI Call 2 success!");
+          console.log("[CHAT] Call 2 berhasil.");
           return secondResponse;
         } catch (secondCallError) {
-          console.error("[CHAT-DEBUG] ❌ Second RAG call failed, returning raw data:", secondCallError);
+          // Log hanya jenis error, bukan stack trace atau data
+          const errMsg = secondCallError instanceof Error ? secondCallError.message : String(secondCallError);
+          console.error("[CHAT] Call 2 gagal. error:", errMsg);
+          // Jangan kembalikan dataContext mentah — tampilkan pesan ramah pengguna
           return {
-            answer: `Berikut data ${indicator} kampus Anda:\n\n${dataContext}`,
+            answer:
+              "Data berhasil ditemukan, namun layanan perangkum AI sedang tidak merespons. " +
+              "Silakan coba beberapa saat lagi.",
             citations: ragResponse.citations,
-            grounded: true,
+            grounded: false,
             outOfScope: null,
             action: null,
           };
         }
       } else {
-        console.warn("[CHAT-DEBUG] ⚠️ Tool returned non-ok status:", toolResult);
+        console.warn("[CHAT] Tool status non-ok:", toolResult.status);
         return {
           answer: `Gagal mengambil data: ${toolResult.message || "Tidak ada data tersedia"}`,
           citations: [],
@@ -125,7 +127,8 @@ export async function handleChatMessage(
         };
       }
     } catch (error) {
-      console.error("[CHAT-DEBUG] ❌ Error executing tool:", error);
+      const toolErrMsg = error instanceof Error ? error.message : String(error);
+      console.error("[CHAT] Error saat eksekusi tool spreadsheet:", toolErrMsg);
       return {
         answer: "Maaf, terjadi kesalahan saat mengambil data kampus.",
         citations: [],
@@ -135,8 +138,8 @@ export async function handleChatMessage(
       };
     }
   } else {
-    // 4. Tidak butuh data spreadsheet → return langsung dari RAG
-    console.log("[CHAT-DEBUG] 3. Intent bukan fetch_data, langsung return jawaban RAG.");
+    // 4. Tidak butuh data spreadsheet -> return langsung dari RAG
+    console.log("[CHAT] Intent bukan fetch_data, return jawaban langsung dari RAG.");
     return ragResponse;
   }
 }
@@ -177,7 +180,7 @@ function formatToolResultForLLM(result: ToolResult): string {
   }
 
   // Data
-if (result.data && "rows" in result.data && result.data.rows.length > 0) {
+  if (result.data && "rows" in result.data && result.data.rows.length > 0) {
     const MAX_LLM_ROWS = 100;
     const rows = result.data.rows.slice(0, MAX_LLM_ROWS);
     const headers = Object.keys(rows[0]);

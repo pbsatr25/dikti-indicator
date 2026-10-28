@@ -2,11 +2,11 @@
 
 ## 1. Ringkasan Eksekutif
 
-Fitur chatbot adalah asisten berbasis AI yang membantu pengguna menjawab pertanyaan seputar data IKU (Indikator Kinerja Utama). Chatbot dapat mengeksekusi query ke spreadsheet yang terhubung oleh user untuk mendapatkan data yang dibutuhkan.
+Fitur chatbot adalah asisten berbasis AI yang membantu pengguna menjawab pertanyaan seputar data IKU (Indikator Kinerja Utama). Chatbot menggunakan layanan RAG (Retrieval-Augmented Generation) eksternal (FastAPI) untuk deteksi intent dan generasi jawaban, serta data layer Next.js untuk mengambil dan memfilter data spreadsheet kampus.
 
-**Type:** Single-round tool call chatbot  
-**Model:** Qwen (serving yet to be determined: Ollama / vLLM / custom)  
-**Integration:** Next.js App Router + PostgreSQL + Google Sheets
+**Type:** Single-round tool call chatbot (maks 1 ronde data, tanpa loop)  
+**Model:** Dikonfigurasi via RAG FastAPI (env `LLM_*`, `CHAT_*`)  
+**Integration:** Next.js App Router + PostgreSQL + Google Sheets + RAG FastAPI
 
 ---
 
@@ -15,49 +15,45 @@ Fitur chatbot adalah asisten berbasis AI yang membantu pengguna menjawab pertany
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           Client Layer                              │
-│  User Request (POST /api/chat) → { message: "..." }                 │
+│  User Request (POST /api/chat)                                      │
+│  { message, scope?, clientData? }                                   │
 └─────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        API Route Layer                              │
 │  src/app/api/chat/route.ts                                          │
 │  - Authentication check (x-user-email header)                       │
-│  - Validation (message required)                                    │
+│  - Validation (message required, max 2000 karakter)                 │
 │  - Auth user lookup (Prisma → app_users)                            │
 └─────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      Chat Service Layer                             │
-│  src/lib/chat/chat-service.ts                                       │
-│  - Build message stack (system + user)                              │
-│  - Call Qwen model                                                  │
-│  - Parse response (answer vs needsData)                             │
-│  - (optional) Execute spreadsheet tool                              │
-│  - (optional) Follow-up with tool result                            │
+│  src/lib/chat/chat-service-rag.ts                                   │
+│  - Call 1: RAG intent detection → action.type === "fetch_data"?     │
+│  - (optional) Execute spreadsheet tool (data layer)                 │
+│  - (optional) Call 2: RAG answer generation + spreadsheet_context   │
+│  - Fallback ramah pengguna jika Call 2 gagal                        │
 └─────────────────────────────────────────────────────────────────────┘
-                                    ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Qwen Client Layer                            │
-│  src/lib/chat/qwen-client.ts                                        │
-│  - Interface: QwenClient.chat(messages)                             │
-│  - Current: StubQwenClient (placeholder)                            │
-│  - Future: HttpQwenClient (real HTTP client)                        │
-└─────────────────────────────────────────────────────────────────────┘
-                                    ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Spreadsheet Tool Layer                         │
-│  src/lib/chat/spreadsheet-tool.ts                                   │
-│  - Query user's data sources (Prisma → data_source_connections)     │
-│  - Parse Google Sheet URL → xlsx export                             │
-│  - Return max 200 rows of data                                      │
-└─────────────────────────────────────────────────────────────────────┘
-                                    ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Database Layer                              │
-│  PostgreSQL (Neon) + Prisma ORM                                     │
-│  - app_users: Authentication & user status                          │
-│  - data_source_connections: User's linked spreadsheets              │
-└─────────────────────────────────────────────────────────────────────┘
+              ↓ (Call 1 & 2)                    ↓ (data layer)
+┌──────────────────────────────┐   ┌────────────────────────────────┐
+│       RAG Client Layer       │   │    Spreadsheet Tool Layer      │
+│  src/lib/chat/rag-client.ts  │   │  src/lib/chat/spreadsheet-     │
+│  - POST /v1/answer           │   │  tool.ts                       │
+│  - AbortSignal.timeout(30s)  │   │  - clientData (browser-parsed) │
+│  - Teruskan blocks ke FE     │   │  - Fallback: server-side fetch  │
+└──────────────────────────────┘   │    (IPv4-first DNS)            │
+              ↓                    │  - filterRows + calculateKpis  │
+┌──────────────────────────────┐   └────────────────────────────────┘
+│  RAG FastAPI Service         │                  ↓
+│  (iku-rag-chatbot)           │   ┌────────────────────────────────┐
+│  - Intent detection          │   │       Database Layer            │
+│  - Retrieval (vector DB)     │   │  PostgreSQL + Prisma ORM       │
+│  - LLM generation            │   │  - app_users                   │
+│  - Respons: answer,          │   │  - data_source_connections     │
+│    citations, blocks,        │   │  - dashboard_tab_connections   │
+│    action, grounded          │   └────────────────────────────────┘
+└──────────────────────────────┘
 ```
 
 ---
@@ -74,16 +70,43 @@ Fitur chatbot adalah asisten berbasis AI yang membantu pengguna menjawab pertany
 **Request Body:**
 ```json
 {
-  "message": "Pertanyaan user seputar data IKU"
+  "message": "Pertanyaan user seputar data IKU",
+  "scope": { "kind": "iku", "ikuCode": "IKU 001" },
+  "clientData": {
+    "rows": [...],
+    "columns": [...],
+    "sourceName": "Spreadsheet IKU",
+    "sourceId": "abc123"
+  }
 }
 ```
+
+> [!NOTE]
+> `scope` dan `clientData` bersifat opsional. `clientData` dikirim browser agar server tidak perlu fetch ulang ke Google Sheets (menghindari `EAI_AGAIN` di Node.js).
 
 **Response (Success 200):**
 ```json
 {
-  "answer": "Jawaban dari AI berdasarkan prompt & data (jika ada)"
+  "answer": "Jawaban dari AI berdasarkan data IKU",
+  "citations": [
+    {
+      "id": "chunk-001",
+      "documentTitle": "Panduan IKU 2024",
+      "section": "Bab 3",
+      "snippet": "..."
+    }
+  ],
+  "blocks": [
+    { "type": "formula", "lines": ["Capaian = (Realisasi / Target) × 100%"] }
+  ],
+  "grounded": true,
+  "outOfScope": null,
+  "action": null
 }
 ```
+
+> [!IMPORTANT]
+> Kontrak `POST /api/chat` → `{ "answer": string }` tidak boleh diubah tanpa izin. Field tambahan (`citations`, `blocks`, dll.) bersifat opsional dan backward-compatible.
 
 **Error Responses:**
 - `401 Unauthorized`: Header `x-user-email` tidak ada atau user tidak ditemukan
@@ -117,65 +140,110 @@ export async function getAuthenticatedUser(request: Request): Promise<AuthResult
    - `{ status: "unauthenticated" }` jika tidak ada user
    - `{ status: "inactive" }` jika user ada tapi `isActive = false`
 
-**⚠️ NOTE (Current State):**
-- Auth masih menggunakan **header-only approach** untuk development/testing
-- Belum ada session management, JWT, atau cookie verification
-- **DO NOT USE** untuk production sebelum implementasi auth yang proper
-
-**TODO (Production):**
-- Implementasi JWT verification atau session cookie
-- Ganti auth mechanism tanpa mengubah signature `getAuthenticatedUser`
+> [!WARNING]
+> Auth masih menggunakan **header-only approach** untuk development/testing. Belum ada session management, JWT, atau cookie verification. **DO NOT USE** untuk production sebelum implementasi auth yang proper.
 
 ---
 
-## 5. System Prompt Design
+## 5. Alur Chat Lengkap (2-Call RAG)
 
-**Location:** `src/lib/chat/prompt.ts`
-
-```typescript
-export const SYSTEM_PROMPT = `Kamu adalah asisten yang menjawab pertanyaan seputar data IKU (Indikator Kinerja Utama).
-
-Jika pertanyaan user MEMBUTUHKAN data dari spreadsheet untuk dijawab dengan akurat,
-JANGAN menjawab langsung. Balas HANYA dengan JSON persis format berikut, tanpa teks lain:
-{"needsData": true, "query": "<uraikan data apa yang dibutuhkan>"}
-
-Jika pertanyaan TIDAK butuh data spreadsheet (sapaan, pertanyaan umum, dsb),
-jawab langsung secara natural seperti biasa, tanpa format JSON.`;
+```
+User kirim pesan
+        │
+        ▼
+handleChatMessage()
+        │
+        ├─► RAG Call 1: POST /v1/answer { question, scope }
+        │         │
+        │         ▼
+        │   ragResponse.action.type === "fetch_data"?
+        │         │
+        │   Tidak ─┤──► return ragResponse langsung (jawaban umum)
+        │         │
+        │    Ya   ▼
+        │
+        ├─► executeTool(user, spreadsheetRequest, clientData?)
+        │         │
+        │         ├── PATH 1: clientData ada → proses langsung (tanpa fetch)
+        │         └── PATH 2: fallback → fetchRowsCached(connection.url)
+        │                            → filterRows + calculateKpis
+        │         │
+        │         ▼
+        │   toolResult.status === "ok"?
+        │         │
+        │   Tidak ─┤──► return pesan error (no_source / no_match / error)
+        │         │
+        │    Ya   ▼
+        │
+        ├─► formatToolResultForLLM(toolResult) → dataContext string
+        │
+        ├─► RAG Call 2: POST /v1/answer { question, spreadsheet_context, scope }
+        │         │
+        │         ├── Berhasil → return secondResponse (jawaban final + citations + blocks)
+        │         │
+        │         └── Gagal / timeout → return pesan fallback ramah pengguna
+        │                               (BUKAN dump data mentah)
+        ▼
+    ChatAnswer { answer, citations, blocks, grounded, outOfScope, action }
 ```
 
-**Design Decisions:**
-- Bahasa Indonesia untuk instruksi (user targeting Indonesian audience)
-- Strict JSON output untuk `needsData` case → mudah parsing
-- Natural response untuk non-data questions → UX lebih natural
-- Single responsibility: hanya fokus IKU data
-
 ---
 
-## 6. Response Parsing Logic
+## 6. RAG Client (`rag-client.ts`)
 
-**Location:** `src/lib/chat/chat-service.ts`
+**Location:** `src/lib/chat/rag-client.ts`
+
+### 6.1 Konfigurasi
+
+| Env Variable | Deskripsi |
+|---|---|
+| `RAG_SERVICE_URL` | Base URL FastAPI RAG (wajib, via `getEnvOrThrow`) |
+| `RAG_SERVICE_TOKEN` | Token internal untuk header `X-Internal-Token` (wajib) |
+
+> [!CAUTION]
+> Kedua env variable ini **wajib diisi** di `.env.local` sebelum RAG dapat berjalan. Jika kosong, `getRagClient()` akan melempar error saat request pertama.
+
+### 6.2 Timeout
+
+Setiap panggilan `fetch` ke RAG menggunakan `AbortSignal.timeout(30_000)` (30 detik). Jika RAG tidak merespons dalam 30 detik, fetch otomatis dibatalkan dan error dilempar ke caller.
+
+### 6.3 Struktur Respons RAGResponse (internal)
 
 ```typescript
-type ParsedQwenResponse =
-  | { type: "answer"; content: string }
-  | { type: "needsData"; query: string };
-
-function parseQwenResponse(rawText: string): ParsedQwenResponse {
-  // STUB: Currently always returns { type: "answer", content: rawText }
-  // TODO: Implement JSON detection when final format is confirmed
-  return { type: "answer", content: rawText };
+interface RAGResponse {
+  answer: string;
+  citations?: Array<{
+    id: string;
+    documentTitle: string;
+    documentVersion?: string;
+    section?: string;
+    page?: number;
+    ikuCode?: string;
+    snippet?: string;
+  }>;
+  blocks?: Array<{ type: "formula" | "note" | "metric"; lines?: string[] }>;
+  grounded?: boolean;
+  outOfScope?: { suggestedTab?: string };
+  action?: { type: string; payload?: unknown };
+  debug?: { model?; chunkIds?; warnings?; llmCalls?; durationMs? };
 }
 ```
 
-**Current Implementation (STUB):**
-- Parsing belum diimplementasikan
-- Semua response dianggap `answer` (tidak ada tool execution)
-- Menunggu keputusan format JSON dari AI engineer
+### 6.4 ChatAnswer (publik — diteruskan ke FE)
 
-**Expected Implementation (Future):**
-- Regex detection: `{.*"needsData":\s*true.*}`
-- JSON.parse → extract `query`
-- Fallback to `answer` jika tidak match format
+```typescript
+export type ChatAnswer = {
+  answer: string;
+  citations: Array<{ id; documentTitle; documentVersion?; section?; page?; ikuCode?; snippet? }>;
+  blocks?: Array<{ type: "formula" | "note" | "metric"; lines?: string[] }>;
+  grounded: boolean;
+  outOfScope: { suggestedTab?: string } | null;
+  action: { type: string; payload?: unknown } | null;
+};
+```
+
+> [!NOTE]
+> Field `blocks` bersifat opsional. Jika FastAPI mengirimkannya, FE dapat menampilkan rumus, catatan, atau metrik secara terstruktur.
 
 ---
 
@@ -183,109 +251,54 @@ function parseQwenResponse(rawText: string): ParsedQwenResponse {
 
 **Location:** `src/lib/chat/spreadsheet-tool.ts`
 
-### 7.1 Database Schema
+### 7.1 Prioritas Pengambilan Data
 
-**Table:** `data_source_connections`
+1. **PATH 1 (Prioritas):** `clientData` dari browser — tidak ada network call ke Google Sheets
+2. **PATH 2 (Fallback):** `fetchRowsCached(url)` — fetch server-side dengan IPv4-first DNS, cache 5 menit
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | String (PK) | Unique identifier |
-| userEmail | String (Indexed) | User email (foreign key logic) |
-| type | String | Data source type (e.g., "google-sheet") |
-| name | String | User-friendly name |
-| url | String | Google Sheets URL |
-| files | Json? | Optional file metadata |
-| createdAt | DateTime | Timestamp |
-| updatedAt | DateTime | Timestamp |
+### 7.2 Database Schema
 
-**Indexes:**
-- `data_source_connections_user_email_idx` on `userEmail`
+**Tables dipakai:**
 
-### 7.2 Function Signature
+| Table | Kolom kunci | Deskripsi |
+|-------|------------|-----------|
+| `app_users` | `email`, `isActive` | Auth & status user |
+| `data_source_connections` | `userEmail`, `url`, `name` | Spreadsheet terhubung |
+| `dashboard_tab_connections` | `userEmail`, `dashboardTab`, `sourceId` | Mapping tab → source |
 
-```typescript
-export async function querySpreadsheet(
-  user: AuthContext,  // { email: string }
-  query: string       // Currently NOT used for filtering
-): Promise<SpreadsheetToolResult>
-```
-
-### 7.3 Return Types
-
-```typescript
-type SpreadsheetToolResult =
-  | {
-      status: "ok";
-      source: { id: string; name: string };
-      columns: string[];
-      rows: Record<string, unknown>[];
-      truncated: boolean;
-    }
-  | { status: "no_source"; message: string }
-  | { status: "error"; message: string };
-```
-
-### 7.4 Algorithm
+### 7.3 Algoritma `executeTool`
 
 ```
-1. Query database: find all data_source_connections WHERE userEmail = user.email
-2. If empty → return { status: "no_source", message: "..." }
-3. Take FIRST connection (MVP: no source selection logic yet)
-4. Parse Google Sheets URL → extract sheetId + gid
-5. Build export URL: https://docs.google.com/spreadsheets/d/{sheetId}/export?format=xlsx&gid={gid}
-6. Fetch xlsx binary via HTTP
-7. Parse xlsx → rows (JSON) + columns (array)
-8. Truncate: if rows.length > 200, keep only first 200
-9. Return { status: "ok", source, columns, rows, truncated }
-10. Catch errors → return { status: "error", message: "..." }
+1. clientData ada & rows > 0?
+   → processRows(clientData.rows, ...)
+   → selesai
+
+2. Query dashboard_tab_connections WHERE userEmail + dashboardTab = indicator
+3. Query data_source_connections WHERE userEmail
+4. Pilih connection (tab-specific atau pertama)
+5. fetchRowsCached(connection.url) → parse XLSX → cache 5 menit
+6. processRows(rows, ...) → normalizeRows → filterRows → calculateKpis → ToolResult
 ```
 
-### 7.5 Current Limitations
+### 7.4 Logging
 
-- **No filtering:** `query` parameter tidak dipakai (future-proofing)
-- **Single source:** Ambil connection pertama, tidak ada logic pemilihan
-- **Hard limit:** Max 200 rows (untuk menjaga context window)
-- **No caching:** Fetch setiap kali dipanggil
+> [!IMPORTANT]
+> Isi spreadsheet adalah **input tidak tepercaya**. Hanya metadata yang boleh di-log (status, jumlah baris, panjang karakter). Isi data mentah **TIDAK BOLEH** masuk ke console.
 
 ---
 
-## 8. Qwen Client Interface
+## 8. Aturan & Batasan (AGENTS.md)
 
-**Location:** `src/lib/chat/qwen-client.ts`
-
-### 8.1 Contract
-
-```typescript
-export interface QwenClient {
-  chat(messages: QwenMessage[]): Promise<string>;
-}
-
-type QwenMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-};
-```
-
-### 8.2 Current Implementation (STUB)
-
-```typescript
-export class StubQwenClient implements QwenClient {
-  async chat(_messages: QwenMessage[]): Promise<string> {
-    return "Ini jawaban dummy dari StubQwenClient. Ganti dengan implementasi asli setelah server Qwen siap.";
-  }
-}
-
-export const qwenClient: QwenClient = new StubQwenClient();
-```
-
-### 8.3 Expected Production Implementation
-
-**Future HttpQwenClient** should implement:
-- HTTP POST ke Qwen server (Ollama / vLLM / custom endpoint)
-- Request body: `{ model: "...", messages: QwenMessage[] }`
-- Parse JSON response → extract `choices[0].message.content`
-- Error handling (timeout, server error, invalid JSON)
-- Optional: temperature, max_tokens, etc.
+| Aturan | Detail |
+|--------|--------|
+| Alur maks 1 ronde data | Call 1 → (opsional) data → Call 2. Tidak ada loop. |
+| Kontrak API tidak berubah | `POST /api/chat` → `{ answer: string }` (field tambahan backward-compatible) |
+| Angka dari data layer | `calculateKpis`, `filterRows`, `normalizeRows` — bukan dari LLM |
+| Spreadsheet = tidak tepercaya | Jangan log isi mentah; hanya log metadata |
+| URL Google Sheets | Hanya `https://docs.google.com/...` |
+| Konfigurasi LLM via env | `LLM_*`, `CHAT_*`, `RAG_SERVICE_URL`, `RAG_SERVICE_TOKEN` |
+| RAG = tanggung jawab AI engineer lain | Hanya antarmuka `knowledge.ts` yang boleh dibuat di sini |
+| Jangan ubah auth/skema DB | Tanpa izin eksplisit |
 
 ---
 
@@ -293,7 +306,6 @@ export const qwenClient: QwenClient = new StubQwenClient();
 
 ### Case 1: Direct Question (No Data Required)
 
-**User Request:**
 ```http
 POST /api/chat
 Headers: { "x-user-email": "user@example.com" }
@@ -302,30 +314,34 @@ Body: { "message": "Halo, apa itu IKU?" }
 
 **Flow:**
 1. Auth check → user exists & active
-2. Build messages: `[{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: "Halo, apa itu IKU?" }]`
-3. Call `qwenClient.chat(messages)` → returns "IKU adalah Indikator Kinerja Utama..."
-4. Parse response → type = "answer"
-5. Return `{ answer: "IKU adalah Indikator Kinerja Utama..." }`
+2. Call 1 → RAG jawab langsung, `action = null`
+3. Return `{ answer: "IKU adalah...", citations: [], grounded: true, outOfScope: null, action: null }`
 
 ### Case 2: Question Requiring Spreadsheet Data
 
-**User Request:**
 ```http
 POST /api/chat
 Headers: { "x-user-email": "user@example.com" }
-Body: { "message": "Berapa total dosen di IKU-017 tahun 2024?" }
+Body: {
+  "message": "Berapa total dosen IKU 001 tahun 2024?",
+  "scope": { "ikuCode": "IKU 001" },
+  "clientData": { "rows": [...], "columns": [...] }
+}
 ```
 
-**Flow (Expected - saat parsing sudah diimplementasi):**
-1. Auth check → user exists & active
-2. Build messages: `[{ role: "system", ... }, { role: "user", content: "..." }]`
-3. Call `qwenClient.chat(messages)` → returns `{"needsData": true, "query": "data IKU-017 tahun 2024"}`
-4. Parse response → type = "needsData"
-5. Call `querySpreadsheet(user, query)` → returns spreadsheet data
-6. Build follow-up prompt: `buildDataFollowupPrompt(JSON.stringify(toolResult))`
-7. Build new messages: `[system, user, assistant(response), user(follow-up)]`
-8. Call `qwenClient.chat(messages)` → returns natural language answer
-9. Return `{ answer: "Total dosen IKU-017 tahun 2024 adalah 150 orang..." }`
+**Flow:**
+1. Auth check → ok
+2. Call 1 → `action.type = "fetch_data"`
+3. `executeTool` → PATH 1 (clientData) → filter tahun 2024 → `ToolResult { status: "ok", matchedRows: 45, ... }`
+4. `formatToolResultForLLM` → `dataContext` (string ringkasan + tabel)
+5. Call 2 → RAG + `spreadsheet_context` → jawaban natural + `blocks`
+6. Return `{ answer: "Total dosen IKU 001 tahun 2024 adalah 150...", citations: [...], blocks: [...] }`
+
+### Case 3: Call 2 Gagal (RAG Tidak Merespons)
+
+**Flow setelah step 4 di atas:**
+5. Call 2 → timeout / error
+6. Return `{ answer: "Data berhasil ditemukan, namun layanan perangkum AI sedang tidak merespons. Silakan coba beberapa saat lagi.", grounded: false }`
 
 ---
 
@@ -337,9 +353,9 @@ Body: { "message": "Berapa total dosen di IKU-017 tahun 2024?" }
 | Database | PostgreSQL (Neon) | Primary data store |
 | ORM | Prisma 7.8.0 | Database queries |
 | Auth | Custom (placeholder) | Header-based auth |
-| AI Model | Qwen (TBD) | Chat completion |
+| RAG Service | FastAPI (iku-rag-chatbot) | Intent detection + LLM generation |
 | Spreadsheet | SheetJS (xlsx) | Excel parsing |
-| HTTP | fetch (Node.js) | Google Sheets export API |
+| HTTP | fetch (Node.js) + AbortSignal.timeout | RAG & Google Sheets API |
 | Runtime | Node.js | Server-side execution |
 
 ---
@@ -349,129 +365,80 @@ Body: { "message": "Berapa total dosen di IKU-017 tahun 2024?" }
 ### ✅ Completed
 - [x] API route endpoint (`/api/chat`)
 - [x] Auth context (`getAuthenticatedUser`)
-- [x] Chat service flow (`handleChatMessage`)
-- [x] Spreadsheet tool integration (`querySpreadsheet`)
-- [x] Types & interfaces defined
-- [x] Google Sheets URL parsing
-- [x] xlsx export fetch & parsing
-- [x] Max 200 rows truncation
-- [x] Error handling & validation
+- [x] Chat service 2-call RAG flow (`handleChatMessage`)
+- [x] RAG client dengan timeout 30s (`rag-client.ts`)
+- [x] Field `blocks` diteruskan dari RAG ke FE
+- [x] Spreadsheet tool integration (`executeTool` — clientData priority)
+- [x] Logging patuh AGENTS.md (tidak log data mentah)
+- [x] Fallback Call 2 dengan pesan ramah pengguna
+- [x] In-memory cache spreadsheet 5 menit
+- [x] IPv4-first DNS untuk menghindari EAI_AGAIN
 
-### ⚠️ TODO (MVP)
-- [ ] Implement JSON response parsing di `parseQwenResponse`
-- [ ] Connect Qwen server (Ollama / vLLM / custom)
+### ⚠️ TODO (Infrastruktur)
+- [ ] Isi `RAG_SERVICE_URL` & `RAG_SERVICE_TOKEN` di `.env.local`
+- [ ] Jalankan FastAPI `iku-rag-chatbot` service
 - [ ] Proper auth mechanism (JWT/session)
-- [ ] Source selection logic (jika user punya >1 spreadsheet)
-- [ ] Caching layer (optional)
-- [ ] Filtering berdasarkan `query` parameter (optional)
+- [ ] Tambah `AbortSignal` dari FE (Stop button) diteruskan ke RAG call
 
 ### 🚫 Future Enhancements
 - [ ] Multi-turn conversation support
 - [ ] Streaming response
-- [ ] Tool calling dengan multiple tools
-- [ ] Retrieval/embedding untuk large spreadsheets
-- [ ] Natural language to SQL (untuk structured queries)
-- [ ] Chart generation dari spreadsheet data
+- [ ] Source selection logic (user punya >1 spreadsheet)
+- [ ] Caching layer (Redis / persistent)
 
 ---
 
-## 12. Testing Guidelines
+## 12. Environment Variables Checklist
 
-### Manual Testing
-1. **Start dev server:** `npm run dev`
-2. **Test direct question:**
-   ```bash
-   curl -X POST http://localhost:3000/api/chat \
-     -H "x-user-email: test@example.com" \
-     -H "Content-Type: application/json" \
-     -d '{"message": "Apa itu IKU?"}'
-   ```
-3. **Test missing auth:**
-   ```bash
-   curl -X POST http://localhost:3000/api/chat \
-     -H "Content-Type: application/json" \
-     -d '{"message": "test"}'
-   # Expected: 401 Unauthorized
-   ```
-4. **Test inactive user:**
-   - Update `app_users SET is_active = false WHERE email = '...'`
-   - Retry request
-   - Expected: 403 Forbidden
-5. **Test spreadsheet tool:**
-   - Insert record ke `data_source_connections`
-   - Request question yang butuh data
-   - Check response berisi data spreadsheet
+```env
+# Wajib untuk RAG
+RAG_SERVICE_URL=https://your-rag-service.example.com
+RAG_SERVICE_TOKEN=your-internal-token
 
-### Expected Test Scenarios
-- [ ] Auth validation (empty header, invalid email, inactive user)
-- [ ] Empty/missing message validation
-- [ ] Direct answer (no spreadsheet needed)
-- [ ] Spreadsheet data retrieval (mocked)
-- [ ] Follow-up response dengan spreadsheet data
-- [ ] Error handling (invalid sheet URL, network error, no sources)
+# Database
+DATABASE_URL=postgresql://...
+
+# LLM (dikonfigurasi di sisi RAG FastAPI, bukan Next.js)
+# LLM_* dan CHAT_* ada di .env FastAPI
+```
 
 ---
 
-## 13. Database Migration Notes
+## 13. Troubleshooting
 
-### Tables Required
-- `app_users` (sudah ada, no changes needed)
-- `data_source_connections` (sudah ada, no changes needed)
+### Issue: `Environment variable RAG_SERVICE_URL is required`
+**Solution:** Isi `RAG_SERVICE_URL` dan `RAG_SERVICE_TOKEN` di `.env.local`
 
-### No New Migrations Needed
-Chatbot feature hanya menggunakan table yang sudah ada:
-- `app_users` → authentication & user lookup
-- `data_source_connections` → user's linked spreadsheets
+### Issue: Jawaban "layanan perangkum AI sedang tidak merespons"
+**Solution:** Pastikan FastAPI `iku-rag-chatbot` berjalan dan dapat diakses dari server Next.js
 
----
+### Issue: Timeout setelah 30 detik
+**Solution:** Periksa koneksi ke RAG service; pertimbangkan menaikkan `RAG_TIMEOUT_MS` di `rag-client.ts`
 
-## 14. Deployment Checklist
-
-- [ ] Qwen server endpoint sudah running (Ollama / vLLM / custom)
-- [ ] `qwen-client.ts` diupdate dengan implementasi HTTP asli
-- [ ] Auth mechanism proper (JWT/session cookie)
-- [ ] Database connections ready (Neon PostgreSQL)
-- [ ] Google Sheets URL valid untuk test data
-- [ ] CORS/origin validation (jika Qwen server remote)
-- [ ] Rate limiting (jika diperlukan)
-- [ ] Logging & monitoring (console.error sudah ada)
-- [ ] Environment variables configured:
-  - `QWEN_SERVER_URL` (atau sesuai implementation)
-  - `DATABASE_URL`
-  - `JWT_SECRET` (jika pakai JWT auth)
-
----
-
-## 15. Troubleshooting
-
-### Issue: Stub response selalu muncul
-**Solution:** Ganti `qwenClient` di `qwen-client.ts` dengan `HttpQwenClient`
-
-### Issue: 401 Unauthorized padahal user ada
-**Solution:** 
+### Issue: `401 Unauthorized` padahal user ada
+**Solution:**
 - Check header `x-user-email` terkirim dengan benar
 - Check email di database (case-sensitive? trailing whitespace?)
 - Check `isActive = true`
 
-### Issue: Spreadsheet tool returns no_source
+### Issue: Spreadsheet tool returns `no_source`
 **Solution:**
 - Check `data_source_connections` ada record untuk `userEmail`
 - Check URL format Google Sheets valid
 
-### Issue: Network error saat fetch Google Sheets
+### Issue: Network error saat fetch Google Sheets (server-side)
 **Solution:**
-- Check internet connection
-- Check spreadsheet share settings (public atau dengan link)
-- Verify URL → export format (`/export?format=xlsx&gid=...`)
+- Kirim `clientData` dari browser agar server tidak perlu fetch (PATH 1)
+- Atau pastikan DNS IPv4-first aktif (sudah di-set di `spreadsheet-tool.ts`)
 
 ---
 
-## 16. Contact & Maintenance
+## 14. Contact & Maintenance
 
 **Maintainer:** AI Engineer / Backend Developer  
-**Last Updated:** October 2026  
-**Project:** Dikti Indicator (Next.js 16 + PostgreSQL)  
+**Last Updated:** Oktober 2026  
+**Project:** Dikti Indicator (Next.js 16 + PostgreSQL + RAG FastAPI)
 
 ---
 
-*Doc generated based on actual codebase: `src/lib/chat/`*
+*Doc diperbarui berdasarkan codebase aktual: `src/lib/chat/` — menggantikan referensi qwen-client yang sudah tidak relevan.*

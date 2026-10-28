@@ -10,13 +10,22 @@ const globalForPrisma = globalThis as unknown as {
 let prismaClient: PrismaClient | undefined;
 
 function getConnectionString() {
-  const connectionString = process.env.DATABASE_URL;
+  const rawUrl = process.env.DATABASE_URL;
 
-  if (!connectionString) {
+  if (!rawUrl) {
     throw new Error("DATABASE_URL belum dikonfigurasi.");
   }
 
-  return connectionString;
+  // Cegah warning pg-connection-string v3 & pastikan sslmode tidak meng-override rejectUnauthorized
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.searchParams.has("sslmode") && !parsed.searchParams.has("uselibpqcompat")) {
+      parsed.searchParams.set("uselibpqcompat", "true");
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
 }
 
 function getPool() {
@@ -27,14 +36,25 @@ function getPool() {
   }
 
   const connectionString = getConnectionString();
-  const isNeon = connectionString.includes("neon.tech") || connectionString.includes("pooler");
+  const isCloudSsl =
+    connectionString.includes("neon.tech") ||
+    connectionString.includes("pooler") ||
+    connectionString.includes("supabase") ||
+    connectionString.includes("sslmode=");
 
-  const pool =
-    globalForPrisma.prismaPool ??
-    new Pool({
-      connectionString,
-      ssl: isNeon ? { rejectUnauthorized: false } : undefined
-    });
+  const pool = new Pool({
+    connectionString,
+    ssl: isCloudSsl ? { rejectUnauthorized: false } : undefined,
+    max: 10,
+    idleTimeoutMillis: 20000, // Tutup koneksi idle sebelum diputus sepihak oleh Neon/Cloud
+    connectionTimeoutMillis: 15000, // Toleransi bila database Neon sedang bangun dari sleep (cold start)
+    keepAlive: true, // Jaga soket TCP tetap hidup
+  });
+
+  // Tangkap error pada idle client agar tidak membuat crash / menggantung
+  pool.on("error", (err) => {
+    console.warn("[PRISMA-POOL] Idle client error (akan reconnect otomatis):", err.message);
+  });
 
   if (process.env.NODE_ENV !== "production") {
     globalForPrisma.prismaPool = pool;
@@ -52,7 +72,7 @@ function getPrismaClient() {
     globalForPrisma.prisma ??
     new PrismaClient({
       adapter: new PrismaPg(getPool()),
-      log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
+      log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
     });
 
   if (process.env.NODE_ENV !== "production") {
@@ -67,5 +87,5 @@ export const prisma = new Proxy({} as PrismaClient, {
     const client = getPrismaClient();
     const value = Reflect.get(client, property, receiver);
     return typeof value === "function" ? value.bind(client) : value;
-  }
+  },
 }) as PrismaClient;

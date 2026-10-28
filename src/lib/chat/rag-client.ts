@@ -40,6 +40,9 @@ interface RAGResponse {
   };
 }
 
+/** Timeout default untuk setiap panggilan ke RAG FastAPI (ms). */
+const RAG_TIMEOUT_MS = 30_000;
+
 export class RagClient {
   private readonly baseUrl: string;
   private readonly serviceToken: string;
@@ -65,6 +68,8 @@ export class RagClient {
         "X-Internal-Token": this.serviceToken,
       },
       body: JSON.stringify(payload),
+      // Batalkan fetch otomatis setelah RAG_TIMEOUT_MS agar server tidak menggantung
+      signal: AbortSignal.timeout(RAG_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -77,6 +82,7 @@ export class RagClient {
     return {
       answer: data.answer,
       citations: data.citations || [],
+      blocks: data.blocks,
       grounded: data.grounded ?? true,
       outOfScope: data.outOfScope || null,
       action: data.action || null,
@@ -105,6 +111,8 @@ export class RagClient {
         "X-Internal-Token": this.serviceToken,
       },
       body: JSON.stringify(payload),
+      // Timeout lebih panjang untuk call kedua karena membawa spreadsheet_context
+      signal: AbortSignal.timeout(RAG_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -117,6 +125,7 @@ export class RagClient {
     return {
       answer: data.answer,
       citations: data.citations || [],
+      blocks: data.blocks,
       grounded: data.grounded ?? true,
       outOfScope: data.outOfScope || null,
       action: data.action || null,

@@ -123,6 +123,11 @@ export type ChatAnswer = {
     ikuCode?: string;
     snippet?: string;
   }>;
+  /**
+   * Blok tambahan dari RAG (rumus, catatan, metrik) untuk ditampilkan
+   * secara terstruktur di FE. Dikirim oleh FastAPI, diteruskan ke client.
+   */
+  blocks?: Array<{ type: "formula" | "note" | "metric"; lines?: string[] }>;
   grounded: boolean;
   outOfScope: { suggestedTab?: string } | null;
   action: { type: string; payload?: unknown } | null;
