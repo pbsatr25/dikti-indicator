@@ -1,6 +1,7 @@
 // Satu-satunya pintu akses API Asisten IKU dari sisi klien.
 // Mode mock aktif selama NEXT_PUBLIC_CHAT_MOCK !== "false".
 
+import { toAnswerBlocks } from "@/lib/chat-blocks";
 import {
   CHAT_DISCLAIMER,
   MOCK_ERROR_KEYWORD,
@@ -152,6 +153,7 @@ function toChatAnswer(data: unknown, req: ChatRequest): ChatAnswer {
     conversationId: req.conversationId ?? createId("conv"),
     messageId: createId("msg"),
     answer: data.answer,
+    blocks: toAnswerBlocks(data.blocks),
     citations: uniqueCitations,
     grounded: data.grounded !== false,
     action: toAction(data.action),
@@ -173,6 +175,9 @@ async function readError(response: Response) {
 
   if (response.status === 401) {
     return "Sesi Anda tidak dikenali server. Silakan keluar lalu masuk kembali.";
+  }
+  if (response.status === 504) {
+    return "Asisten IKU terlalu lama merespons. Coba lagi atau sederhanakan pertanyaan.";
   }
   if (response.status >= 500) {
     return "Asisten IKU sedang tidak dapat memproses pertanyaan. Coba lagi beberapa saat.";

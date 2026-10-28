@@ -48,9 +48,10 @@ Respons BE dinormalkan menjadi `ChatAnswer` di klien:
 | `action: { type, payload }` | dipakai hanya jika ada `label` + `dashboardTab` (di `payload` atau di akar); selain itu dibuang |
 | `conversationId`, `messageId` | **tidak dikirim BE** → dibuat di klien |
 | `disclaimer` | **tidak dikirim BE** → ditambahkan kode FE (FR-14) |
-| `blocks`, `confidence` | tidak dikirim BE → kartu formula/metrik tidak tampil |
+| `blocks` | divalidasi per blok di `src/lib/chat-blocks.ts`. Bentuk kontrak FE diterima apa adanya; bentuk RAG `{ type, lines }` dipetakan: `formula.lines` → formula, `note.lines` → satu `note` per baris, `metric.lines` ("Label: nilai") → tabel Rincian/Hasil. Blok tidak dikenal dibuang |
+| `confidence` | tidak dikirim BE → tidak ditampilkan |
 
-Error: `401` → "Sesi tidak dikenali, masuk kembali"; `403`/`400` → pesan `error` dari server; `5xx` atau body non-JSON → pesan umum. Timeout klien 90 detik; tombol Stop membatalkan fetch.
+Error: `401` → "Sesi tidak dikenali, masuk kembali"; `403`/`400` → pesan `error` dari server; `504` (timeout RAG 85 detik) → "terlalu lama merespons"; `5xx` lain atau body non-JSON → pesan umum. Timeout klien 90 detik; tombol Stop membatalkan fetch.
 
 ### 0.2 Permintaan revisi ke BE (Rakan) — belum diubah FE
 
@@ -58,10 +59,10 @@ Error: `401` → "Sesi tidak dikenali, masuk kembali"; `403`/`400` → pesan `er
 |---|---|---|---|---|
 | B1 | **Blokir build** | `toolResult.message` tidak ada di varian `status: "ok"` → `npm run build` gagal (`Failed to type check`) | `src/lib/chat/chat-service-rag.ts:85` | ganti dengan `"message" in toolResult ? toolResult.message : "OK"` |
 | B2 | Tinggi (`AUTH NOT READY`) | identitas dari header `x-user-email` bisa dipalsukan siapa pun yang tahu email terdaftar | `src/lib/chat/auth-context.ts` | sesi server (cookie `httpOnly`); signature `getAuthenticatedUser` tetap |
-| B3 | Tinggi | **cakupan per halaman dilanggar**: IKU yang disebut di pertanyaan diutamakan atas `scope` (di halaman IKU 001, "data IKU 9" mengambil data IKU 009) | `chat-service-rag.ts:52-64` | di cakupan IKU, `indicator` = `scope.ikuCode`; IKU lain di pertanyaan → `outOfScope: { suggestedTab }` |
+| B3 | Tinggi (dimitigasi di RAG, lihat A9) | **cakupan per halaman dilanggar**: IKU yang disebut di pertanyaan diutamakan atas `scope` (di halaman IKU 001, "data IKU 9" mengambil data IKU 009) | `chat-service-rag.ts:52-64` | di cakupan IKU, `indicator` = `scope.ikuCode`; IKU lain di pertanyaan → `outOfScope: { suggestedTab }` |
 | B4 | Tinggi | isi pertanyaan dan cuplikan data spreadsheet ditulis ke log (`[CHAT-DEBUG]`), melanggar aturan "jangan log isi mentah" | `chat-service-rag.ts:37,45,90-91` | log status/panjang/durasi saja, atau di balik flag debug |
 | B5 | Sedang | fetch ke RAG tanpa timeout dan tidak diteruskan `request.signal`, sehingga Stop di FE tidak menghentikan proses server | `rag-client.ts:61,101` | `AbortSignal.timeout(...)` digabung dengan `request.signal` |
-| B6 | Sedang | `blocks` dari RAG dibuang | `rag-client.ts:77-83,117-123` | teruskan `blocks` (setelah bentuknya disamakan, lihat A2) |
+| B6 | ✅ selesai (`44c952e`) | `blocks` dari RAG dibuang | `rag-client.ts:77-83,117-123` | teruskan `blocks` (setelah bentuknya disamakan, lihat A2) |
 | B7 | Sedang | respons tanpa `disclaimer`, `conversationId`, `messageId` | `route.ts` | tambahkan sesuai bagian 1 (FE sudah punya fallback) |
 | B8 | Sedang | `clientData` tidak divalidasi (ukuran, tipe sel) dan tidak dibatasi panjang body | `route.ts:38-40` | batasi jumlah baris/ukuran body; tolak `413` |
 | B9 | Rendah | pertanyaan > 2000 karakter dibalas `200` dengan teks, bukan `400` | `chat-service-rag.ts:27-35` | `400 { error }` (FE sudah memblokir di klien) |
@@ -75,13 +76,14 @@ Error: `401` → "Sesi tidak dikenali, masuk kembali"; `403`/`400` → pesan `er
 | # | Temuan | Usulan |
 |---|---|---|
 | A1 | Intent `fetch_data` hanya berupa `action.type`; parameter (IKU, tahun, fakultas, jenjang, agregasi) ditebak BE dengan regex, dan `aggregation` selalu `"none"`. Akibatnya hingga 100 baris dikirim ke LLM dan **LLM menghitung sendiri**, melanggar FR-08/FR-18 | kembalikan `action: { type: "fetch_data", payload: { year, faculty, degree, aggregation, column } }`; perhitungan tetap di `data-helpers.ts`, LLM hanya menjelaskan `summary` |
-| A2 | Bentuk `blocks` RAG (`{ type, lines }`) berbeda dari FE (`note.text`, `metric.label/value/target/caption`) | samakan dengan `AnswerBlock` di `src/types/chat.ts` |
+| A2 | Bentuk `blocks` RAG (`{ type, lines }`) berbeda dari FE (`note.text`, `metric.label/value/target/caption`) | **sementara dipetakan FE** (`chat-blocks.ts`, perubahan #8). Jangka panjang: kirim bentuk `AnswerBlock` langsung, terutama `metric` berangka (`value`, `target` dari `iku_targets`) agar kartu capaian tampil; adapter FE sudah menerima kedua bentuk |
 | A3 | `citations` boleh tanpa `documentVersion`/`snippet` | selalu isi dari metadata chunk (FR-07, NFR Traceability) |
 | A4 | `action` untuk navigasi belum berbentuk `{ label, dashboardTab }` | gunakan bentuk itu agar tombol "Buka IKU 00x" tampil |
 | A5 | Tidak ada konteks percakapan (FR-09) | terima `history` (beberapa turn terakhir) + query rewriting; perlu kesepakatan kontrak dengan BE |
 | A6 | Tidak ada `confidence` | kirim `"tinggi" \| "sedang" \| "rendah"` dari skor retrieval |
 | A7 | Dua kali panggil LLM untuk pertanyaan data (intent → jawaban), latensi tinggi tanpa streaming | intent ringan (klasifikasi/aturan) di panggilan pertama; tahap 2: SSE (NFR token pertama ≤ 5 detik) |
 | A8 | `spreadsheet_context` adalah data tak tepercaya | bungkus dengan delimiter dan tegaskan di system prompt agar tidak diikuti sebagai instruksi |
+| A9 | ✅ dikerjakan di branch `feat/cakupan-halaman` repo RAG (perubahan #8): `scope` divalidasi (400), gerbang `outOfScope` sebelum intent/LLM, retrieval difilter `iku_id`, cakupan di system prompt. Pertanyaan yang menyebut IKU lain kini berhenti di gerbang sebelum `fetch_data`, sehingga B3 tidak lagi terpicu dari teks pertanyaan | BE tetap disarankan memakai `scope.ikuCode` sebagai `indicator` di cakupan IKU (pertahanan berlapis) |
 
 ## 1. `POST /api/chat` — ajukan pertanyaan (FR-04–FR-09, FR-14, FR-18)
 
