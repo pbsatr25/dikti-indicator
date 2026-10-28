@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/chat/auth-context";
 import { handleChatMessage } from "@/lib/chat/chat-service-rag";
 import type { ClientSpreadsheetData } from "@/lib/chat/types";
@@ -54,6 +54,20 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result);
   } catch (error: unknown) {
+    // Deteksi timeout: AbortError/TimeoutError dilempar oleh AbortSignal.timeout() di rag-client
+    const isTimeout =
+      (error instanceof Error && error.name === "TimeoutError") ||
+      (error instanceof Error && error.name === "AbortError") ||
+      (error instanceof Error && error.message.toLowerCase().includes("timeout"));
+
+    if (isTimeout) {
+      console.warn("[CHAT] Timeout: RAG service tidak merespons dalam 85 detik.");
+      return NextResponse.json(
+        { error: "Layanan AI sedang lambat merespons. Silakan coba beberapa saat lagi." },
+        { status: 504 }
+      );
+    }
+
     // Structured error logging untuk diagnosa koneksi ke RAG service
     console.error("Chat API error:", error instanceof Error ? error.message : String(error));
 

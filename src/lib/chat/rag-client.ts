@@ -41,7 +41,7 @@ interface RAGResponse {
 }
 
 /** Timeout default untuk setiap panggilan ke RAG FastAPI (ms). */
-const RAG_TIMEOUT_MS = 30_000;
+const RAG_TIMEOUT_MS = 85_000;
 
 export class RagClient {
   private readonly baseUrl: string;
@@ -68,7 +68,7 @@ export class RagClient {
         "X-Internal-Token": this.serviceToken,
       },
       body: JSON.stringify(payload),
-      // Batalkan fetch otomatis setelah RAG_TIMEOUT_MS agar server tidak menggantung
+      // Batalkan fetch otomatis setelah RAG_TIMEOUT_MS (85 detik) agar server tidak menggantung
       signal: AbortSignal.timeout(RAG_TIMEOUT_MS),
     });
 
@@ -111,7 +111,7 @@ export class RagClient {
         "X-Internal-Token": this.serviceToken,
       },
       body: JSON.stringify(payload),
-      // Timeout lebih panjang untuk call kedua karena membawa spreadsheet_context
+      // Timeout yang sama (85 detik) untuk call kedua yang membawa spreadsheet_context
       signal: AbortSignal.timeout(RAG_TIMEOUT_MS),
     });
 

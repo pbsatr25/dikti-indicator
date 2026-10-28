@@ -1,4 +1,4 @@
-# Dokumentasi Arsitektur Chatbot - Dikti Indicator
+﻿# Dokumentasi Arsitektur Chatbot - Dikti Indicator
 
 ## 1. Ringkasan Eksekutif
 
@@ -112,6 +112,7 @@ Fitur chatbot adalah asisten berbasis AI yang membantu pengguna menjawab pertany
 - `401 Unauthorized`: Header `x-user-email` tidak ada atau user tidak ditemukan
 - `403 Forbidden`: User exists tapi `is_active = false`
 - `400 Bad Request`: Body tidak ada `message` atau message kosong
+- `504 Gateway Timeout`: RAG service tidak merespons dalam 85 detik
 - `500 Internal Server Error`: Exception saat processing
 
 **Runtime Configuration:**
@@ -366,7 +367,7 @@ Body: {
 - [x] API route endpoint (`/api/chat`)
 - [x] Auth context (`getAuthenticatedUser`)
 - [x] Chat service 2-call RAG flow (`handleChatMessage`)
-- [x] RAG client dengan timeout 30s (`rag-client.ts`)
+- [x] RAG client dengan timeout 85s + 504 handler (`rag-client.ts`, `route.ts`)
 - [x] Field `blocks` diteruskan dari RAG ke FE
 - [x] Spreadsheet tool integration (`executeTool` — clientData priority)
 - [x] Logging patuh AGENTS.md (tidak log data mentah)
