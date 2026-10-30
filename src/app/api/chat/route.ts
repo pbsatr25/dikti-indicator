@@ -5,6 +5,8 @@ import type { ClientSpreadsheetData } from "@/lib/chat/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// Satu pertanyaan bisa memanggil layanan RAG dua kali (masing-masing timeout 85 detik).
+export const maxDuration = 180;
 
 export async function POST(request: Request) {
   try {
