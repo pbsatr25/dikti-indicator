@@ -9,6 +9,7 @@ import { useDashboardStore } from "@/store/dashboard-store";
 import type { ChatMessage, ChatScope } from "@/types/chat";
 import { AnswerBlocks } from "./answer-blocks";
 import { CitationList } from "./citation-list";
+import { MarkdownAnswer } from "./markdown-answer";
 import styles from "./chat.module.scss";
 
 type AssistantChatMessage = Extract<ChatMessage, { role: "assistant" }>;
@@ -93,7 +94,7 @@ export function AssistantMessage({ message, scope, isSending }: AssistantMessage
         </>
       )}
 
-      {message.text && <p className={styles.answerText}>{message.text}</p>}
+      {message.text && <MarkdownAnswer text={message.text} />}
 
       {answer && !answer.grounded && (
         <InlineNotification

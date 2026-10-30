@@ -58,6 +58,8 @@ type Iku002Row = {
   belumBekerja: number;
   tidakTerlacak: number;
   totalSuccess: number;
+  /** Jumlah lulusan berbobot (pembilang rumus IKU 2). */
+  weightedScore: number;
   responseRate: number;
   ikuPercentage: number;
   __raw: RawRow;
@@ -80,6 +82,23 @@ const chartTooltipStyles = {
 };
 
 const donutColors = ["#0f62fe", "#8a3ffc", "#198038", "#ee538b", "#6f6f6f"];
+
+// Bobot IKU 2 (Buku IKU Diktisaintek Berdampak V1). Rumus: Σ(n × bobot) ÷ total responden × 100%.
+// Spreadsheet tidak merinci jenis wirausaha (founder/freelancer, masa tunggu, UMP), sehingga
+// dipakai 0,8 seperti kalkulator layanan RAG (spreadsheet_calc.py).
+const BOBOT_IKU2 = {
+  bekerja6BulanTinggi: 1,
+  bekerja1TahunTinggi: 0.8,
+  bekerja1TahunRendah: 0.6,
+  lanjutStudi: 0.6,
+  wirausaha: 0.8,
+};
+
+type Iku002Totals = { respondents: number; score: number };
+
+function ikuFromTotals(totals: Iku002Totals) {
+  return safePercent(totals.score, totals.respondents);
+}
 
 function normalizeText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -222,9 +241,10 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
     const degreeCol = findColumn(columns, [/^jenjang$/, /degree/], "Jenjang");
     const totalLulusanCol = findColumn(columns, [/total.*lulusan/, /jumlah.*lulusan/], "Total Lulusan");
     const respondentCol = findColumn(columns, [/responden.*ts/, /tracer.*study/, /^responden$/], "Responden TS");
-    const bekerja6Col = findColumn(columns, [/bekerja.*<6.*bulan/, /bekerja.*6.*bulan/, /bekerja.*<6.*>/], "Bekerja <6 bulan >1.2 UMP");
-    const bekerja1TinggiCol = findColumn(columns, [/bekerja.*<1.*tahun.*>1\.2/, /bekerja.*1.*tahun.*>1\.2/, /bekerja.*<1.*tahun.*>.*ump/], "Bekerja <1 tahun >1.2 UMP");
-    const bekerja1RendahCol = findColumn(columns, [/bekerja.*<1.*tahun.*<1\.2/, /bekerja.*1.*tahun.*<1\.2/, /bekerja.*<1.*tahun.*<.*ump/], "Bekerja <1 tahun <1.2 UMP");
+    // Header spreadsheet bisa memakai singkatan ("<6 bln", "<1 thn") maupun kata lengkap.
+    const bekerja6Col = findColumn(columns, [/bekerja.*<\s*6\s*(bln|bulan)/, /bekerja.*6\s*(bln|bulan)/], "Bekerja <6 bln >1.2 UMP");
+    const bekerja1TinggiCol = findColumn(columns, [/bekerja.*<\s*1\s*(thn|tahun).*>\s*1[.,]2/], "Bekerja <1 thn >1.2 UMP");
+    const bekerja1RendahCol = findColumn(columns, [/bekerja.*<\s*1\s*(thn|tahun).*<\s*1[.,]2/], "Bekerja <1 thn <1.2 UMP");
     const lanjutCol = findColumn(columns, [/lanjut.*studi/, /^studi$/], "Lanjut Studi");
     const wirausahaCol = findColumn(columns, [/wirausaha/, /entrepreneur/], "Wirausaha");
     const belumBekerjaCol = findColumn(columns, [/belum.*bekerja/, /unemployed/], "Belum Bekerja");
@@ -238,13 +258,22 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
         const degree = toStringValue(row[degreeCol]);
         const totalGraduates = Math.max(0, toNumber(row[totalLulusanCol]));
         const respondentTs = Math.max(0, toNumber(row[respondentCol]));
-        const bekerja = Math.max(0, toNumber(row[bekerja6Col])) + Math.max(0, toNumber(row[bekerja1TinggiCol])) + Math.max(0, toNumber(row[bekerja1RendahCol]));
+        const bekerja6Tinggi = Math.max(0, toNumber(row[bekerja6Col]));
+        const bekerja1Tinggi = Math.max(0, toNumber(row[bekerja1TinggiCol]));
+        const bekerja1Rendah = Math.max(0, toNumber(row[bekerja1RendahCol]));
+        const bekerja = bekerja6Tinggi + bekerja1Tinggi + bekerja1Rendah;
         const lanjutStudi = Math.max(0, toNumber(row[lanjutCol]));
         const wirausaha = Math.max(0, toNumber(row[wirausahaCol]));
         const belumBekerja = Math.max(0, toNumber(row[belumBekerjaCol]));
         const tidakTerlacak = Math.max(0, toNumber(row[terlacakCol]));
         const totalSuccess = bekerja + lanjutStudi + wirausaha;
-        const ikuPercentage = safePercent(totalSuccess, totalGraduates);
+        const weightedScore =
+          bekerja6Tinggi * BOBOT_IKU2.bekerja6BulanTinggi +
+          bekerja1Tinggi * BOBOT_IKU2.bekerja1TahunTinggi +
+          bekerja1Rendah * BOBOT_IKU2.bekerja1TahunRendah +
+          lanjutStudi * BOBOT_IKU2.lanjutStudi +
+          wirausaha * BOBOT_IKU2.wirausaha;
+        const ikuPercentage = safePercent(weightedScore, respondentTs);
         const responseRate = safePercent(respondentTs, totalGraduates);
 
         return {
@@ -260,6 +289,7 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
           belumBekerja,
           tidakTerlacak,
           totalSuccess,
+          weightedScore,
           responseRate,
           ikuPercentage,
           __raw: row,
@@ -378,13 +408,14 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
     const totalGraduates = filteredForCharts.reduce((acc, row) => acc + row.totalGraduates, 0);
     const totalRespondent = filteredForCharts.reduce((acc, row) => acc + row.respondentTs, 0);
     const totalSuccess = filteredForCharts.reduce((acc, row) => acc + row.totalSuccess, 0);
+    const totalScore = filteredForCharts.reduce((acc, row) => acc + row.weightedScore, 0);
     const totalAlumniMemenuhi = totalSuccess;
     return {
       totalGraduates,
       totalRespondent,
       totalSuccess,
       totalAlumniMemenuhi,
-      ikuPercentage: safePercent(totalSuccess, totalGraduates),
+      ikuPercentage: safePercent(totalScore, totalRespondent),
       responseRate: safePercent(totalRespondent, totalGraduates),
       facultyCount: new Set(filteredForCharts.map((row) => row.faculty)).size,
       prodiCount: new Set(filteredForCharts.map((row) => `${row.faculty}::${row.prodi}`)).size,
@@ -392,48 +423,51 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
   }, [filteredForCharts]);
 
   const trendData = useMemo(() => {
-    const map = new Map<string, { graduates: number; success: number }>();
+    const map = new Map<string, Iku002Totals & { graduates: number }>();
     filteredForCharts.forEach((row) => {
-      const current = map.get(row.year) ?? { graduates: 0, success: 0 };
+      const current = map.get(row.year) ?? { graduates: 0, respondents: 0, score: 0 };
       current.graduates += row.totalGraduates;
-      current.success += row.totalSuccess;
+      current.respondents += row.respondentTs;
+      current.score += row.weightedScore;
       map.set(row.year, current);
     });
 
     return [...map.entries()]
       .map(([yearLabel, value]) => ({
         year: yearLabel,
-        iku: Number(safePercent(value.success, value.graduates).toFixed(2)),
+        iku: Number(ikuFromTotals(value).toFixed(2)),
         graduates: value.graduates,
       }))
       .sort((a, b) => a.year.localeCompare(b.year, "id", { numeric: true }));
   }, [filteredForCharts]);
 
   const facultyComparison = useMemo(() => {
-    const map = new Map<string, { graduates: number; success: number }>();
+    const map = new Map<string, Iku002Totals & { graduates: number }>();
     filteredForCharts.forEach((row) => {
-      const current = map.get(row.faculty) ?? { graduates: 0, success: 0 };
+      const current = map.get(row.faculty) ?? { graduates: 0, respondents: 0, score: 0 };
       current.graduates += row.totalGraduates;
-      current.success += row.totalSuccess;
+      current.respondents += row.respondentTs;
+      current.score += row.weightedScore;
       map.set(row.faculty, current);
     });
 
     return [...map.entries()]
       .map(([facultyLabel, value]) => ({
         faculty: facultyLabel,
-        iku: Number(safePercent(value.success, value.graduates).toFixed(2)),
+        iku: Number(ikuFromTotals(value).toFixed(2)),
         graduates: value.graduates,
       }))
       .sort((a, b) => b.iku - a.iku);
   }, [filteredForCharts]);
 
   const prodiRanking = useMemo(() => {
-    const map = new Map<string, { faculty: string; prodi: string; graduates: number; success: number }>();
+    const map = new Map<string, Iku002Totals & { faculty: string; prodi: string; graduates: number }>();
     filteredForCharts.forEach((row) => {
       const key = `${row.faculty}::${row.prodi}`;
-      const current = map.get(key) ?? { faculty: row.faculty, prodi: row.prodi, graduates: 0, success: 0 };
+      const current = map.get(key) ?? { faculty: row.faculty, prodi: row.prodi, graduates: 0, respondents: 0, score: 0 };
       current.graduates += row.totalGraduates;
-      current.success += row.totalSuccess;
+      current.respondents += row.respondentTs;
+      current.score += row.weightedScore;
       map.set(key, current);
     });
 
@@ -443,7 +477,7 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
         prodi: item.prodi,
         label: item.prodi,
         graduates: item.graduates,
-        iku: Number(safePercent(item.success, item.graduates).toFixed(2)),
+        iku: Number(ikuFromTotals(item).toFixed(2)),
       }))
       .sort((a, b) => b.iku - a.iku)
       .slice(0, 10);
@@ -487,8 +521,10 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
       const cells = years.map((yearLabel) => {
         const matching = filteredForCharts.filter((row) => row.faculty === facultyLabel && row.year === yearLabel);
         const graduates = matching.reduce((acc, row) => acc + row.totalGraduates, 0);
-        const success = matching.reduce((acc, row) => acc + row.totalSuccess, 0);
-        const iku = safePercent(success, graduates);
+        const iku = ikuFromTotals({
+          respondents: matching.reduce((acc, row) => acc + row.respondentTs, 0),
+          score: matching.reduce((acc, row) => acc + row.weightedScore, 0),
+        });
         return { year: yearLabel, iku, graduates };
       });
 
@@ -503,24 +539,27 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
       return "Belum ada data yang cocok dengan filter aktif.";
     }
 
-    const facultyMap = new Map<string, { graduates: number; success: number }>();
-    const prodiMap = new Map<string, { faculty: string; prodi: string; graduates: number; success: number }>();
-    const yearMap = new Map<string, { graduates: number; success: number }>();
+    const facultyMap = new Map<string, Iku002Totals & { success: number }>();
+    const prodiMap = new Map<string, { faculty: string; prodi: string; respondents: number; score: number; success: number }>();
+    const yearMap = new Map<string, Iku002Totals & { success: number }>();
 
     filteredForCharts.forEach((row) => {
-      const facultyCurrent = facultyMap.get(row.faculty) ?? { graduates: 0, success: 0 };
-      facultyCurrent.graduates += row.totalGraduates;
+      const facultyCurrent = facultyMap.get(row.faculty) ?? { respondents: 0, score: 0, success: 0 };
+      facultyCurrent.respondents += row.respondentTs;
+      facultyCurrent.score += row.weightedScore;
       facultyCurrent.success += row.totalSuccess;
       facultyMap.set(row.faculty, facultyCurrent);
 
       const prodiKey = `${row.faculty}::${row.prodi}`;
-      const prodiCurrent = prodiMap.get(prodiKey) ?? { faculty: row.faculty, prodi: row.prodi, graduates: 0, success: 0 };
-      prodiCurrent.graduates += row.totalGraduates;
+      const prodiCurrent = prodiMap.get(prodiKey) ?? { faculty: row.faculty, prodi: row.prodi, respondents: 0, score: 0, success: 0 };
+      prodiCurrent.respondents += row.respondentTs;
+      prodiCurrent.score += row.weightedScore;
       prodiCurrent.success += row.totalSuccess;
       prodiMap.set(prodiKey, prodiCurrent);
 
-      const yearCurrent = yearMap.get(row.year) ?? { graduates: 0, success: 0 };
-      yearCurrent.graduates += row.totalGraduates;
+      const yearCurrent = yearMap.get(row.year) ?? { respondents: 0, score: 0, success: 0 };
+      yearCurrent.respondents += row.respondentTs;
+      yearCurrent.score += row.weightedScore;
       yearCurrent.success += row.totalSuccess;
       yearMap.set(row.year, yearCurrent);
     });
@@ -528,7 +567,7 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
     const bestFaculty = [...facultyMap.entries()]
       .map(([facultyLabel, value]) => ({
         faculty: facultyLabel,
-        iku: safePercent(value.success, value.graduates),
+        iku: ikuFromTotals(value),
         success: value.success,
       }))
       .sort((a, b) => b.iku - a.iku)[0];
@@ -537,7 +576,7 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
       .map((value) => ({
         faculty: value.faculty,
         prodi: value.prodi,
-        iku: safePercent(value.success, value.graduates),
+        iku: ikuFromTotals(value),
         success: value.success,
       }))
       .sort((a, b) => b.iku - a.iku)[0];
@@ -545,7 +584,7 @@ export function Iku002Dashboard({ rows, parseStatus, errorMessage }: Props) {
     const years = [...yearMap.entries()]
       .map(([yearLabel, value]) => ({
         year: yearLabel,
-        iku: safePercent(value.success, value.graduates),
+        iku: ikuFromTotals(value),
       }))
       .sort((a, b) => a.year.localeCompare(b.year, "id", { numeric: true }));
 

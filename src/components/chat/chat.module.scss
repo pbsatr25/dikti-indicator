@@ -378,6 +378,63 @@
   @include type-style('body-02');
 }
 
+// Jawaban LLM dalam Markdown: kalimat jawaban di atas, rincian (tabel/daftar) di bawahnya.
+.markdown {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-04;
+  max-width: 70ch;
+  overflow-wrap: anywhere;
+  @include type-style('body-02');
+
+  p,
+  ul,
+  ol {
+    margin: 0;
+  }
+
+  ul,
+  ol {
+    padding-inline-start: $spacing-06;
+  }
+
+  ul {
+    list-style: disc;
+  }
+
+  ol {
+    list-style: decimal;
+  }
+
+  li + li {
+    margin-block-start: $spacing-02;
+  }
+
+  strong {
+    font-weight: 600;
+  }
+
+  em {
+    color: var(--cds-text-secondary);
+  }
+
+  // Paragraf setelah tabel/daftar biasanya penjelasan & sumber: diredam.
+  > .tableWrap ~ p,
+  > ul ~ p,
+  > ol ~ p {
+    color: var(--cds-text-secondary);
+    @include type-style('body-compact-01');
+  }
+
+  code {
+    @include type-style('code-01');
+  }
+
+  .tableWrap {
+    max-width: 100%;
+  }
+}
+
 .status {
   display: flex;
   align-items: center;
